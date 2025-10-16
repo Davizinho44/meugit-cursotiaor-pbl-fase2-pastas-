@@ -1,0 +1,235 @@
+
+#include <DHT.h>
+
+
+#define PIN_BTN_N 12        // Botão sensor Nitrogênio (GPIO 12)
+#define PIN_BTN_P 14        // Botão sensor Fósforo (GPIO 14)
+#define PIN_BTN_K 27        // Botão sensor Potássio (GPIO 27)
+#define PIN_LDR 34          // LDR sensor pH (Analógico GPIO 34)
+#define PIN_DHT 15          // DHT22 sensor umidade (GPIO 15)
+#define PIN_RELE 26         // Relé bomba d'água (GPIO 26)
+
+
+#define PH_MIN 5.5          
+#define PH_MAX 6.5        
+#define UMIDADE_MIN 60.0   
+#define UMIDADE_MAX 80.0    
+
+
+#define DHTTYPE DHT22
+DHT dht(PIN_DHT, DHTTYPE);
+
+
+bool nitrogenio_ok = false;
+bool fosforo_ok = false;
+bool potassio_ok = false;
+float ph_solo = 0.0;
+float umidade_solo = 0.0;
+bool bomba_ligada = false;
+
+void setup() {
+  Serial.begin(115200);
+  delay(1000);
+
+  Serial.println("========================================");
+  Serial.println("SISTEMA DE IRRIGAÇÃO INTELIGENTE - MILHO");
+  Serial.println("FarmTech Solutions");
+  Serial.println("========================================\n");
+
+  
+  pinMode(PIN_BTN_N, INPUT_PULLUP);
+  pinMode(PIN_BTN_P, INPUT_PULLUP);
+  pinMode(PIN_BTN_K, INPUT_PULLUP);
+  pinMode(PIN_LDR, INPUT);
+
+  
+  pinMode(PIN_RELE, OUTPUT);
+  digitalWrite(PIN_RELE, LOW); // Bomba inicialmente desligada
+
+  
+  dht.begin();
+
+  Serial.println("Sistema inicializado com sucesso!");
+  Serial.println("Monitorando condições do solo...\n");
+
+  delay(2000);
+}
+
+
+void loop() {
+  // Ler sensores
+  lerSensoresNPK();
+  lerSensorPH();
+  lerSensorUmidade();
+
+  
+  exibirLeituras();
+
+  
+  controlarIrrigacao();
+
+  
+  delay(3000);
+  Serial.println("----------------------------------------\n");
+}
+
+void lerSensoresNPK() {
+
+  nitrogenio_ok = (digitalRead(PIN_BTN_N) == LOW);
+  fosforo_ok = (digitalRead(PIN_BTN_P) == LOW);
+  potassio_ok = (digitalRead(PIN_BTN_K) == LOW);
+}
+
+void lerSensorPH() {
+  
+  int leitura_ldr = analogRead(PIN_LDR);
+
+  
+  ph_solo = map(leitura_ldr, 0, 4095, 0, 140) / 10.0;
+
+
+  if (ph_solo < 0) ph_solo = 0;
+  if (ph_solo > 14) ph_solo = 14;
+}
+
+void lerSensorUmidade() {
+
+  umidade_solo = dht.readHumidity();
+  
+  if (isnan(umidade_solo)) {
+    Serial.println("ERRO: Falha ao ler DHT22!");
+    umidade_solo = 0.0;
+  }
+}
+
+void exibirLeituras() {
+  Serial.println("========== LEITURAS DOS SENSORES ==========");
+
+  // Status NPK
+  Serial.print("Nitrogênio (N): ");
+  Serial.println(nitrogenio_ok ? "✓ OK" : "✗ BAIXO");
+
+  Serial.print("Fósforo (P):    ");
+  Serial.println(fosforo_ok ? "✓ OK" : "✗ BAIXO");
+
+  Serial.print("Potássio (K):   ");
+  Serial.println(potassio_ok ? "✓ OK" : "✗ BAIXO");
+
+  // pH do solo
+  Serial.print("pH do Solo:     ");
+  Serial.print(ph_solo, 1);
+
+  if (ph_solo >= PH_MIN && ph_solo <= PH_MAX) {
+    Serial.println(" ✓ IDEAL");
+  } else if (ph_solo < PH_MIN) {
+    Serial.println(" ✗ MUITO ÁCIDO");
+  } else {
+    Serial.println(" ✗ MUITO ALCALINO");
+  }
+
+  // Umidade do solo
+  Serial.print("Umidade:        ");
+  Serial.print(umidade_solo, 1);
+  Serial.print("%");
+
+  if (umidade_solo >= UMIDADE_MIN && umidade_solo <= UMIDADE_MAX) {
+    Serial.println(" ✓ IDEAL");
+  } else if (umidade_solo < UMIDADE_MIN) {
+    Serial.println(" ✗ SOLO SECO");
+  } else {
+    Serial.println(" ✗ SOLO ENCHARCADO");
+  }
+
+  Serial.println();
+}
+
+void controlarIrrigacao() {
+  Serial.println("========== ANÁLISE E DECISÃO ==========");
+
+  // Verificar se todos os nutrientes estão OK
+  bool npk_ok = nitrogenio_ok && fosforo_ok && potassio_ok;
+
+  // Verificar se pH está no range ideal
+  bool ph_ok = (ph_solo >= PH_MIN && ph_solo <= PH_MAX);
+
+  // Verificar condições de umidade
+  bool solo_seco = (umidade_solo < UMIDADE_MIN);
+  bool solo_encharcado = (umidade_solo > UMIDADE_MAX);
+
+  // LÓGICA DE DECISÃO:
+  // LIGAR bomba SE: solo seco E pH ideal E NPK OK
+  // DESLIGAR bomba SE: solo encharcado OU condições não ideais
+
+  bool deve_ligar = solo_seco && ph_ok && npk_ok;
+  bool deve_desligar = solo_encharcado || !ph_ok || !npk_ok;
+
+  // Exibir análise
+  Serial.print("NPK Completo: ");
+  Serial.println(npk_ok ? "SIM ✓" : "NÃO ✗");
+
+  Serial.print("pH Adequado:  ");
+  Serial.println(ph_ok ? "SIM ✓" : "NÃO ✗");
+
+  Serial.print("Solo Seco:    ");
+  Serial.println(solo_seco ? "SIM" : "NÃO");
+
+  Serial.print("Solo Encharcado: ");
+  Serial.println(solo_encharcado ? "SIM" : "NÃO");
+
+  Serial.println();
+
+  // Controlar bomba
+  if (deve_ligar && !bomba_ligada) {
+    ligarBomba();
+  } else if (deve_desligar && bomba_ligada) {
+    desligarBomba();
+  } else if (bomba_ligada) {
+    Serial.println("⚡ BOMBA: LIGADA (mantendo irrigação)");
+  } else {
+    Serial.println("⭕ BOMBA: DESLIGADA (condições adequadas)");
+  }
+
+  // Exibir recomendações se necessário
+  exibirRecomendacoes(npk_ok, ph_ok, solo_seco, solo_encharcado);
+}
+
+void ligarBomba() {
+  digitalWrite(PIN_RELE, HIGH);
+  bomba_ligada = true;
+  Serial.println("🚨 AÇÃO: LIGANDO BOMBA D'ÁGUA!");
+  Serial.println("⚡ BOMBA: LIGADA (iniciando irrigação)");
+}
+
+void desligarBomba() {
+  digitalWrite(PIN_RELE, LOW);
+  bomba_ligada = false;
+  Serial.println("🚨 AÇÃO: DESLIGANDO BOMBA D'ÁGUA!");
+  Serial.println("⭕ BOMBA: DESLIGADA");
+}
+
+void exibirRecomendacoes(bool npk_ok, bool ph_ok, bool solo_seco, bool solo_encharcado) {
+  bool tem_problema = !npk_ok || !ph_ok || solo_encharcado;
+
+  if (tem_problema) {
+    Serial.println("\n⚠️  RECOMENDAÇÕES:");
+
+    if (!npk_ok) {
+      if (!nitrogenio_ok) Serial.println("   - Aplicar fertilizante nitrogenado");
+      if (!fosforo_ok) Serial.println("   - Aplicar fertilizante fosfatado");
+      if (!potassio_ok) Serial.println("   - Aplicar fertilizante potássico");
+    }
+
+    if (!ph_ok) {
+      if (ph_solo < PH_MIN) {
+        Serial.println("   - Solo muito ácido: aplicar calcário");
+      } else {
+        Serial.println("   - Solo muito alcalino: aplicar enxofre");
+      }
+    }
+
+    if (solo_encharcado) {
+      Serial.println("   - Melhorar drenagem do solo");
+      Serial.println("   - Reduzir frequência de irrigação");
+    }
+  }
+}
